@@ -1,359 +1,149 @@
-<?php
-/**
- * Plugin Name: Scryfall MTGO Database Sync
- * Description: Synchronizes the MTGO card database with the Scryfall API.
- * Version: 1.0.0
- * Author: MTGO Database
- */
-
-if (!defined('ABSPATH')) {
-    exit;
-}
-
-define('SMTGO_VERSION', '1.0.0');
-
-function smtgo_table() {
-    global $wpdb;
-    return $wpdb->prefix . 'scryfall_mtgo_cards';
-}
 
 /**
- * Create the database table upon plugin activation.
+ * Retrieve Scryfall bulk data metadata.
  */
-register_activation_hook(__FILE__, 'smtgo_activate');
+function smtgo_get_bulk_metadata() {
 
-function smtgo_activate() {
-    global $wpdb;
-
-    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-
-    $table = smtgo_table();
-    $charset = $wpdb->get_charset_collate();
-
-    $sql = "CREATE TABLE $table (
-        id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-        scryfall_id char(36) NOT NULL,
-        mtgo_id bigint(20) unsigned DEFAULT NULL,
-        name varchar(255) NOT NULL,
-        set_code varchar(20) DEFAULT NULL,
-        collector_number varchar(50) DEFAULT NULL,
-        rarity varchar(30) DEFAULT NULL,
-        lang varchar(10) DEFAULT NULL,
-        released_at date DEFAULT NULL,
-        image_uri text DEFAULT NULL,
-        prices longtext DEFAULT NULL,
-        card_data longtext NOT NULL,
-        updated_at datetime NOT NULL,
-        PRIMARY KEY  (id),
-        UNIQUE KEY scryfall_id (scryfall_id),
-        KEY mtgo_id (mtgo_id),
-        KEY card_name (name),
-        KEY set_code (set_code)
-    ) $charset;";
-
-    dbDelta($sql);
-}
-
-/**
- * Register the plugin administration menu.
- */
-add_action('admin_menu', function () {
-    add_menu_page(
-        'Scryfall MTGO',
-        'Scryfall MTGO',
-        'manage_options',
-        'scryfall-mtgo',
-        'smtgo_admin_page',
-        'dashicons-database',
-        80
-    );
-});
-
-/**
- * Display the synchronization administration page.
- */
-function smtgo_admin_page() {
-    global $wpdb;
-
-    $count = (int) $wpdb->get_var(
-        "SELECT COUNT(*) FROM " . smtgo_table()
-    );
-
-    $last_sync = get_option('smtgo_last_sync', 'Never synchronized');
-    ?>
-    <div class="wrap">
-        <h1>Scryfall MTGO Database</h1>
-
-        <div style="background:#fff;padding:25px;
-                    max-width:700px;border:1px solid #ddd;
-                    margin-top:20px;">
-
-            <h2>MTGO Card Database</h2>
-
-            <p>
-                Total cards in the local database:
-                <strong id="smtgo-count">
-                    <?php echo esc_html($count); ?>
-                </strong>
-            </p>
-
-            <p>
-                Last synchronization:
-                <strong>
-                    <?php echo esc_html($last_sync); ?>
-                </strong>
-            </p>
-
-            <hr>
-
-            <button id="smtgo-start"
-                    class="button button-primary button-hero">
-                Update Scryfall Database
-            </button>
-
-            <div id="smtgo-status"
-                 style="margin-top:20px;">
-                Ready to synchronize.
-            </div>
-
-            <div style="background:#ddd;height:20px;
-                        margin-top:15px;max-width:600px;">
-                <div id="smtgo-progress"
-                     style="background:#2271b1;
-                            width:0%;height:20px;
-                            transition:width .2s;">
-                </div>
-            </div>
-
-            <p id="smtgo-details"></p>
-        </div>
-    </div>
-
-    <script>
-    jQuery(function($) {
-
-        let running = false;
-        let pages = 0;
-        let imported = 0;
-        let updated = 0;
-
-        $('#smtgo-start').on('click', function() {
-
-            if (running) return;
-
-            if (!confirm(
-                'Do you want to start synchronizing all MTGO cards?'
-            )) return;
-
-            running = true;
-            pages = 0;
-            imported = 0;
-            updated = 0;
-
-            $('#smtgo-start').prop('disabled', true);
-            $('#smtgo-progress').css('width', '0%');
-            $('#smtgo-status').text('Starting synchronization...');
-
-            $.post(ajaxurl, {
-                action: 'smtgo_start',
-                nonce: '<?php echo esc_js(wp_create_nonce('smtgo_sync')); ?>'
-            }).done(function(response) {
-
-                if (!response.success) {
-                    finish(response.data || 'Unable to start synchronization.');
-                    return;
-                }
-
-                nextPage();
-
-            }).fail(function() {
-                finish('WordPress connection error.');
-            });
-        });
-
-        function nextPage() {
-
-            $.post(ajaxurl, {
-                action: 'smtgo_step',
-                nonce: '<?php echo esc_js(wp_create_nonce('smtgo_sync')); ?>'
-            }).done(function(response) {
-
-                if (!response.success) {
-                    finish(response.data || 'Synchronization error.');
-                    return;
-                }
-
-                const data = response.data;
-
-                if (data.done) {
-                    $('#smtgo-progress').css('width', '100%');
-
-                    $('#smtgo-count').text(data.total);
-                    finish('Synchronization completed successfully!');
-                    return;
-                }
-
-                pages++;
-                imported += data.inserted;
-                updated += data.updated;
-
-                $('#smtgo-status').text(
-                    'Pages downloaded: ' + pages
-                );
-
-                $('#smtgo-details').text(
-                    'New cards: ' + imported +
-                    ' | Updated cards: ' + updated
-                );
-
-                // Display an approximate synchronization progress.
-                const progress = Math.min(
-                    95,
-                    pages * 2
-                );
-
-                $('#smtgo-progress').css(
-                    'width', progress + '%'
-                );
-
-                nextPage();
-
-            }).fail(function() {
-                finish(
-                    'Communication error. You can retry synchronization.'
-                );
-            });
-        }
-
-        function finish(message) {
-            running = false;
-            $('#smtgo-start').prop('disabled', false);
-            $('#smtgo-status').text(message);
-        }
-    });
-    </script>
-    <?php
-}
-
-/**
- * Verify the AJAX request nonce and administrator permissions.
- */
-function smtgo_authorize() {
-    check_ajax_referer('smtgo_sync', 'nonce');
-
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('Insufficient permissions.');
-    }
-}
-
-/**
- * Initialize a new synchronization process.
- */
-add_action('wp_ajax_smtgo_start', 'smtgo_start');
-
-function smtgo_start() {
-    smtgo_authorize();
-
-    update_option(
-        'smtgo_next_page',
-        'https://api.scryfall.com/cards/search?q=game%3Amtgo'
-    );
-
-    update_option('smtgo_sync_running', 1);
-
-    wp_send_json_success([
-        'message' => 'Synchronization started.'
-    ]);
-}
-
-/**
- * Fetch and save one page of Scryfall search results.
- */
-add_action('wp_ajax_smtgo_step', 'smtgo_step');
-
-function smtgo_step() {
-    global $wpdb;
-
-    smtgo_authorize();
-
-    if (!get_option('smtgo_sync_running')) {
-        wp_send_json_error('Synchronization is not active.');
-    }
-
-    $url = get_option('smtgo_next_page');
-
-    if (!$url) {
-        update_option('smtgo_sync_running', 0);
-        wp_send_json_success([
-            'done' => true,
-            'total' => (int) $wpdb->get_var(
-                "SELECT COUNT(*) FROM " . smtgo_table()
-            )
-        ]);
-    }
-
-    // Only allow requests to the official Scryfall API domain.
-    $parts = wp_parse_url($url);
-
-    if (
-        empty($parts['scheme']) ||
-        $parts['scheme'] !== 'https' ||
-        empty($parts['host']) ||
-        strtolower($parts['host']) !== 'api.scryfall.com'
-    ) {
-        update_option('smtgo_sync_running', 0);
-        wp_send_json_error('Invalid API URL.');
-    }
-
-    $response = wp_remote_get($url, [
-        'timeout' => 30,
-        'redirection' => 0,
-        'headers' => [
-            'User-Agent' => 'WordPress-Scryfall-MTGO-Sync/1.0',
-            'Accept' => 'application/json'
+    $response = wp_remote_get(
+        'https://api.scryfall.com/bulk-data',
+        [
+            'timeout' => 60,
+            'headers' => [
+                'User-Agent' => 'WordPress-Scryfall-MTGO-Sync/2.0',
+                'Accept' => 'application/json'
+            ]
         ]
-    ]);
+    );
 
     if (is_wp_error($response)) {
-        wp_send_json_error($response->get_error_message());
+        return $response;
     }
 
-    $status = wp_remote_retrieve_response_code($response);
-
-    if ($status !== 200) {
-        wp_send_json_error(
-            'Scryfall returned HTTP ' . $status
+    if (wp_remote_retrieve_response_code($response) !== 200) {
+        return new WP_Error(
+            'scryfall_bulk_error',
+            'Unable to retrieve Scryfall bulk metadata.'
         );
     }
 
-    $body = json_decode(
+    $result = json_decode(
         wp_remote_retrieve_body($response),
         true
     );
 
-    if (
-        !is_array($body) ||
-        !isset($body['data']) ||
-        !is_array($body['data'])
-    ) {
-        wp_send_json_error('Invalid Scryfall API response.');
+    if (empty($result['data'])) {
+        return new WP_Error(
+            'invalid_bulk_data',
+            'Invalid Scryfall bulk metadata.'
+        );
     }
 
+    foreach ($result['data'] as $bulk) {
+        if (($bulk['type'] ?? '') === 'default_cards') {
+            return $bulk;
+        }
+    }
+
+    return new WP_Error(
+        'bulk_not_found',
+        'Default Cards export was not found.'
+    );
+}
+
+/**
+ * Download and import the Scryfall JSON export.
+ */
+function smtgo_download_bulk() {
+
+    if (!current_user_can('manage_options')) {
+        return new WP_Error('permission_error', 'Access denied.');
+    }
+
+    $metadata = smtgo_get_bulk_metadata();
+
+    if (is_wp_error($metadata)) {
+        return $metadata;
+    }
+
+    $download_url = $metadata['download_uri'] ?? '';
+
+    if (!$download_url) {
+        return new WP_Error(
+            'missing_download_url',
+            'Scryfall download URL is missing.'
+        );
+    }
+
+    $parts = wp_parse_url($download_url);
+
+    if (
+        ($parts['scheme'] ?? '') !== 'https' ||
+        strtolower($parts['host'] ?? '') !== 'data.scryfall.io'
+    ) {
+        return new WP_Error(
+            'invalid_download_url',
+            'Invalid Scryfall download URL.'
+        );
+    }
+
+    $file = download_url($download_url, 300);
+
+    if (is_wp_error($file)) {
+        return $file;
+    }
+
+    return [
+        'file' => $file,
+        'metadata' => $metadata
+    ];
+}
+
+/**
+ * Import cards from a downloaded JSON export.
+ */
+function smtgo_import_bulk_json($file) {
+
+    global $wpdb;
+
     $table = smtgo_table();
+
+    // JSON decoding requires sufficient PHP memory.
+    $json = file_get_contents($file);
+
+    if ($json === false) {
+        return new WP_Error(
+            'file_read_error',
+            'Unable to read the downloaded JSON file.'
+        );
+    }
+
+    $cards = json_decode($json, true);
+
+    unset($json);
+
+    if (!is_array($cards)) {
+        return new WP_Error(
+            'json_decode_error',
+            'Invalid JSON export.'
+        );
+    }
+
     $inserted = 0;
     $updated = 0;
+    $skipped = 0;
 
-    foreach ($body['data'] as $card) {
+    foreach ($cards as $card) {
 
-        if (empty($card['id']) || empty($card['name'])) {
-            continue;
-        }
-
-        // Apply an additional MTGO game availability check.
+        // Import only cards available on MTGO.
         if (
             empty($card['games']) ||
             !in_array('mtgo', $card['games'], true)
         ) {
+            $skipped++;
+            continue;
+        }
+
+        if (empty($card['id']) || empty($card['name'])) {
             continue;
         }
 
@@ -369,26 +159,22 @@ function smtgo_step() {
         $image = '';
 
         if (!empty($card['image_uris']['normal'])) {
-            $image = $card['image_uris']['normal'];
+            $image = esc_url_raw(
+                $card['image_uris']['normal']
+            );
         } elseif (!empty($card['card_faces'][0]['image_uris']['normal'])) {
-            $image = $card['card_faces'][0]['image_uris']['normal'];
+            $image = esc_url_raw(
+                $card['card_faces'][0]['image_uris']['normal']
+            );
         }
 
         $released = null;
 
-        if (!empty($card['released_at'])) {
-            $date = $card['released_at'];
-
-            if (
-                preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) &&
-                checkdate(
-                    (int) substr($date, 5, 2),
-                    (int) substr($date, 8, 2),
-                    (int) substr($date, 0, 4)
-                )
-            ) {
-                $released = $date;
-            }
+        if (
+            !empty($card['released_at']) &&
+            preg_match('/^\d{4}-\d{2}-\d{2}$/', $card['released_at'])
+        ) {
+            $released = $card['released_at'];
         }
 
         $data = [
@@ -396,20 +182,15 @@ function smtgo_step() {
             'mtgo_id' => !empty($card['mtgo_id'])
                 ? absint($card['mtgo_id']) : null,
             'name' => sanitize_text_field($card['name']),
-            'set_code' => !empty($card['set'])
-                ? sanitize_text_field($card['set']) : null,
-            'collector_number' => !empty($card['collector_number'])
-                ? sanitize_text_field($card['collector_number']) : null,
-            'rarity' => !empty($card['rarity'])
-                ? sanitize_text_field($card['rarity']) : null,
-            'lang' => !empty($card['lang'])
-                ? sanitize_text_field($card['lang']) : null,
+            'set_code' => sanitize_text_field($card['set'] ?? ''),
+            'collector_number' => sanitize_text_field(
+                $card['collector_number'] ?? ''
+            ),
+            'rarity' => sanitize_text_field($card['rarity'] ?? ''),
+            'lang' => sanitize_text_field($card['lang'] ?? ''),
             'released_at' => $released,
             'image_uri' => $image,
-            'prices' => wp_json_encode(
-                $card['prices'] ?? [],
-                JSON_UNESCAPED_UNICODE
-            ),
+            'prices' => wp_json_encode($card['prices'] ?? []),
             'card_data' => wp_json_encode(
                 $card,
                 JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
@@ -417,20 +198,15 @@ function smtgo_step() {
             'updated_at' => current_time('mysql', true)
         ];
 
-        $formats = [
-            '%s', '%d', '%s', '%s', '%s', '%s',
-            '%s', '%s', '%s', '%s', '%s', '%s'
-        ];
-
         $result = $wpdb->replace(
             $table,
-            $data,
-            $formats
+            $data
         );
 
         if ($result === false) {
-            wp_send_json_error(
-                'Database error: ' . $wpdb->last_error
+            return new WP_Error(
+                'database_error',
+                $wpdb->last_error
             );
         }
 
@@ -441,41 +217,52 @@ function smtgo_step() {
         }
     }
 
-    // Retrieve the URL of the next results page.
-    $next = !empty($body['has_more'])
-        ? ($body['next_page'] ?? '')
-        : '';
-
-    if ($next) {
-        $next_parts = wp_parse_url($next);
-
-        if (
-            empty($next_parts['scheme']) ||
-            $next_parts['scheme'] !== 'https' ||
-            empty($next_parts['host']) ||
-            strtolower($next_parts['host']) !== 'api.scryfall.com'
-        ) {
-            update_option('smtgo_sync_running', 0);
-            wp_send_json_error('Invalid next page URL.');
-        }
-
-        update_option('smtgo_next_page', $next);
-    } else {
-        delete_option('smtgo_next_page');
-        update_option('smtgo_sync_running', 0);
-        update_option(
-            'smtgo_last_sync',
-            current_time('mysql')
-        );
-    }
-
-    // Return synchronization results for the current page.
-    wp_send_json_success([
-        'done' => !$next,
+    return [
         'inserted' => $inserted,
         'updated' => $updated,
-        'total' => (int) $wpdb->get_var(
-            "SELECT COUNT(*) FROM $table"
+        'skipped' => $skipped,
+        'total' => $inserted + $updated
+    ];
+}
+
+/**
+ * Start bulk JSON synchronization.
+ */
+add_action('wp_ajax_smtgo_start', 'smtgo_start');
+
+function smtgo_start() {
+
+    check_ajax_referer('smtgo_sync', 'nonce');
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Insufficient permissions.');
+    }
+
+    $download = smtgo_download_bulk();
+
+    if (is_wp_error($download)) {
+        wp_send_json_error($download->get_error_message());
+    }
+
+    $result = smtgo_import_bulk_json($download['file']);
+
+    @unlink($download['file']);
+
+    if (is_wp_error($result)) {
+        wp_send_json_error($result->get_error_message());
+    }
+
+    update_option(
+        'smtgo_last_sync',
+        current_time('mysql')
+    );
+
+    update_option(
+        'smtgo_bulk_updated_at',
+        sanitize_text_field(
+            $download['metadata']['updated_at'] ?? ''
         )
-    ]);
+    );
+
+    wp_send_json_success($result);
 }
